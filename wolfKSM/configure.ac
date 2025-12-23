@@ -163,16 +163,16 @@ AC_ARG_ENABLE([sanitizers],
     [enable_sanitizers=no])
 
 if test "x$enable_sanitizers" = "xyes"; then
-    AX_APPEND_COMPILE_FLAGS([-fsanitize=address,undefined -fno-omit-frame-pointer])
-    AX_APPEND_LINK_FLAGS([-fsanitize=address,undefined])
+    CFLAGS="$CFLAGS -fsanitize=address,undefined -fno-omit-frame-pointer"
+    LDFLAGS="$LDFLAGS -fsanitize=address,undefined"
 fi
 
 dnl ======================================
 dnl Compiler flags
 dnl ======================================
-AX_APPEND_COMPILE_FLAGS([-Wall -Wextra -Wno-unused-parameter])
-AX_APPEND_COMPILE_FLAGS([-Wformat -Wformat-security])
-AX_APPEND_COMPILE_FLAGS([-fstack-protector-strong])
+CFLAGS="$CFLAGS -Wall -Wextra -Wno-unused-parameter"
+CFLAGS="$CFLAGS -Wformat -Wformat-security"
+CFLAGS="$CFLAGS -fstack-protector-strong"
 
 dnl ======================================
 dnl Output

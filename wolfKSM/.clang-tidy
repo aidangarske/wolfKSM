@@ -30,7 +30,7 @@ WarningsAsErrors: >
   clang-analyzer-security.FloatLoopCounter,
   clang-analyzer-unix.Malloc
 
-HeaderFilterRegex: '.*'
+HeaderFilterRegex: '(include/wolfksm|src)/.*'
 FormatStyle: file
 
 CheckOptions:
@@ -41,12 +41,8 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.GlobalVariableCase
     value: lower_case
-  - key: readability-identifier-naming.GlobalVariablePrefix
-    value: '_'
   - key: readability-identifier-naming.StaticVariableCase
     value: lower_case
-  - key: readability-identifier-naming.StaticVariablePrefix
-    value: '_'
   - key: readability-identifier-naming.MacroDefinitionCase
     value: UPPER_CASE
   - key: readability-identifier-naming.EnumConstantCase
@@ -57,7 +53,4 @@ CheckOptions:
     value: lower_case
   - key: readability-identifier-naming.TypedefSuffix
     value: '_t'
-  # Performance
-  - key: performance-unnecessary-value-param.AllowedTypes
-    value: ''
 ...
