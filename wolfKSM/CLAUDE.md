@@ -35,9 +35,40 @@ Private key bytes NEVER cross API boundary. Only:
 ## Build
 
 ```bash
+# Standard build
 ./configure --with-wolfssl=/path/to/wolfssl
 make && make check
+
+# With static analysis
+./configure --enable-static-analysis --with-wolfssl=/path/to/wolfssl
+make analyze  # format-check + cppcheck
+
+# With sanitizers (debug)
+./configure --enable-sanitizers --with-wolfssl=/path/to/wolfssl
+make check
 ```
+
+## Code Quality
+
+```bash
+make format       # Auto-format all C files
+make format-check # CI: verify formatting
+make cppcheck     # Static analysis
+make lint         # clang-tidy (needs compile_commands.json)
+make analyze      # All checks
+```
+
+Config files: `.clang-format`, `.clang-tidy`, `cppcheck-suppressions.txt`
+
+### Coding Style
+- 4-space indent, 80-col limit, Linux braces
+- Functions: `lower_case`, internal: `_prefix`
+- Constants: `UPPER_CASE`, types: `*_t`
+
+### Security Checks (enforced by clang-tidy)
+- `cert-*`: CERT-C compliance
+- `clang-analyzer-security.*`: Buffer/null safety
+- `bugprone-*`: Common bug patterns
 
 ## Extension Points
 
