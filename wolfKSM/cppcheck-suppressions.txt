@@ -1,0 +1,11 @@
+# wolfKSM cppcheck suppression file
+# Suppress false positives and system-level checks
+
+# System include warnings (not our code)
+missingIncludeSystem
+
+# wolfSSL headers may trigger warnings we can't control
+unmatchedSuppression
+
+# Inline assembly or hardware-specific code
+*:*wolfssl*
