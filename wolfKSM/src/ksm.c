@@ -9,6 +9,24 @@
 
 #include "ksm_internal.h"
 #include <wolfssl/wolfcrypt/aes.h>
+#include <wolfssl/wolfcrypt/sha256.h>
+#include <wolfssl/wolfcrypt/hmac.h>
+
+#if defined(__linux__)
+#include <sys/prctl.h>
+#endif
+
+/* Thread safety macros */
+#ifdef KSM_HAVE_PTHREAD
+    #define KSM_LOCK()   pthread_mutex_lock(&_ksm.lock)
+    #define KSM_UNLOCK() pthread_mutex_unlock(&_ksm.lock)
+#elif defined(KSM_HAVE_WIN32_THREADS)
+    #define KSM_LOCK()   EnterCriticalSection(&_ksm.lock)
+    #define KSM_UNLOCK() LeaveCriticalSection(&_ksm.lock)
+#else
+    #define KSM_LOCK()
+    #define KSM_UNLOCK()
+#endif
 
 /* Global state - keys stored here in mlock'd memory */
 static ksm_state_t _ksm;
@@ -28,15 +46,35 @@ int ksm_init(void)
     /* Zero state first */
     _ksm_zero(&_ksm, sizeof(_ksm));
 
+    /* Initialize free list */
+    _ksm_slot_init_freelist(&_ksm);
+
+    /* Initialize mutex */
+#ifdef KSM_HAVE_PTHREAD
+    pthread_mutex_init(&_ksm.lock, NULL);
+#elif defined(KSM_HAVE_WIN32_THREADS)
+    InitializeCriticalSection(&_ksm.lock);
+#endif
+
     /* Lock memory to prevent swapping */
     if (_ksm_mlock(&_ksm, sizeof(_ksm)) == 0) {
         _ksm.mem_locked = 1;
     }
     /* Continue even if mlock fails - better than no security */
 
+    /* Disable core dumps on Linux */
+#if defined(__linux__)
+    prctl(PR_SET_DUMPABLE, 0);
+#endif
+
     /* Initialize RNG */
     ret = wc_InitRng(&_ksm.rng);
     if (ret != 0) {
+#ifdef KSM_HAVE_PTHREAD
+        pthread_mutex_destroy(&_ksm.lock);
+#elif defined(KSM_HAVE_WIN32_THREADS)
+        DeleteCriticalSection(&_ksm.lock);
+#endif
         _ksm_zero(&_ksm, sizeof(_ksm));
         return KSM_E_RNG;
     }
@@ -62,6 +100,13 @@ void ksm_shutdown(void)
         _ksm_munlock(&_ksm, sizeof(_ksm));
     }
 
+    /* Destroy mutex before zeroing */
+#ifdef KSM_HAVE_PTHREAD
+    pthread_mutex_destroy(&_ksm.lock);
+#elif defined(KSM_HAVE_WIN32_THREADS)
+    DeleteCriticalSection(&_ksm.lock);
+#endif
+
     /* Secure zero entire state */
     _ksm_zero(&_ksm, sizeof(_ksm));
 }
@@ -85,9 +130,12 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     /* Allocate slot */
     slot_id = _ksm_slot_alloc(&_ksm);
     if (slot_id == KSM_KEY_INVALID) {
+        KSM_UNLOCK();
         return KSM_E_FULL;
     }
 
@@ -158,35 +206,47 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
 
         default:
             _ksm_slot_free(&_ksm, slot_id);
+            KSM_UNLOCK();
             return KSM_E_UNSUPPORTED;
     }
 
     if (ret != 0) {
         _ksm_slot_free(&_ksm, slot_id);
+        KSM_UNLOCK();
         return KSM_E_CRYPTO;
     }
 
     *id = slot_id;
+    KSM_UNLOCK();
     return KSM_SUCCESS;
 }
 
 int ksm_destroy(ksm_key_id id)
 {
+    int result;
+
     if (!_ksm.initialized) {
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     if (_ksm_slot_get(&_ksm, id) == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
     _ksm_slot_free(&_ksm, id);
-    return KSM_SUCCESS;
+    result = KSM_SUCCESS;
+
+    KSM_UNLOCK();
+    return result;
 }
 
 int ksm_get_type(ksm_key_id id, ksm_key_type* type)
 {
     ksm_slot_t* slot;
+    int result;
 
     if (type == NULL) {
         return KSM_E_INVALID;
@@ -196,13 +256,19 @@ int ksm_get_type(ksm_key_id id, ksm_key_type* type)
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     slot = _ksm_slot_get(&_ksm, id);
     if (slot == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
     *type = slot->type;
-    return KSM_SUCCESS;
+    result = KSM_SUCCESS;
+
+    KSM_UNLOCK();
+    return result;
 }
 
 /* ============================================================
@@ -213,6 +279,7 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
 {
     ksm_slot_t* slot;
     int ret;
+    int result;
 
     if (out == NULL || len == NULL) {
         return KSM_E_INVALID;
@@ -222,8 +289,11 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     slot = _ksm_slot_get(&_ksm, id);
     if (slot == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
@@ -258,13 +328,17 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
         case KSM_TYPE_AES_128:
         case KSM_TYPE_AES_256:
             /* Symmetric keys have no public component */
+            KSM_UNLOCK();
             return KSM_E_TYPE_MISMATCH;
 
         default:
+            KSM_UNLOCK();
             return KSM_E_UNSUPPORTED;
     }
 
-    return (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    result = (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    KSM_UNLOCK();
+    return result;
 }
 
 /* ============================================================
@@ -276,6 +350,7 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
 {
     ksm_slot_t* slot;
     int ret;
+    int result;
 
     if (hash == NULL || sig == NULL || sigLen == NULL) {
         return KSM_E_INVALID;
@@ -285,8 +360,11 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     slot = _ksm_slot_get(&_ksm, id);
     if (slot == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
@@ -315,10 +393,13 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
 #endif
 
         default:
+            KSM_UNLOCK();
             return KSM_E_TYPE_MISMATCH;
     }
 
-    return (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    result = (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    KSM_UNLOCK();
+    return result;
 }
 
 int ksm_decrypt(ksm_key_id id, const byte* in, word32 inLen,
@@ -326,6 +407,7 @@ int ksm_decrypt(ksm_key_id id, const byte* in, word32 inLen,
 {
     ksm_slot_t* slot;
     int ret;
+    int result;
 
     if (in == NULL || out == NULL || outLen == NULL) {
         return KSM_E_INVALID;
@@ -335,8 +417,11 @@ int ksm_decrypt(ksm_key_id id, const byte* in, word32 inLen,
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     slot = _ksm_slot_get(&_ksm, id);
     if (slot == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
@@ -351,10 +436,58 @@ int ksm_decrypt(ksm_key_id id, const byte* in, word32 inLen,
             break;
 
         default:
+            KSM_UNLOCK();
             return KSM_E_TYPE_MISMATCH;
     }
 
-    return (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    result = (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    KSM_UNLOCK();
+    return result;
+}
+
+/* Simple HKDF-Extract + Expand for ECDH output normalization */
+static int _ksm_hkdf_sha256(const byte* ikm, word32 ikmLen,
+                            byte* okm, word32 okmLen)
+{
+    Hmac hmac;
+    byte prk[WC_SHA256_DIGEST_SIZE];
+    byte info_counter[1];
+    int ret;
+
+    /* Extract: PRK = HMAC-SHA256(salt="", IKM) */
+    ret = wc_HmacInit(&hmac, NULL, INVALID_DEVID);
+    if (ret != 0) return ret;
+
+    ret = wc_HmacSetKey(&hmac, WC_SHA256, (const byte*)"", 0);
+    if (ret != 0) { wc_HmacFree(&hmac); return ret; }
+
+    ret = wc_HmacUpdate(&hmac, ikm, ikmLen);
+    if (ret != 0) { wc_HmacFree(&hmac); return ret; }
+
+    ret = wc_HmacFinal(&hmac, prk);
+    wc_HmacFree(&hmac);
+    if (ret != 0) return ret;
+
+    /* Expand: OKM = HMAC-SHA256(PRK, 0x01) - single block for <=32 bytes */
+    if (okmLen > WC_SHA256_DIGEST_SIZE) {
+        okmLen = WC_SHA256_DIGEST_SIZE;
+    }
+
+    ret = wc_HmacInit(&hmac, NULL, INVALID_DEVID);
+    if (ret != 0) { _ksm_zero(prk, sizeof(prk)); return ret; }
+
+    ret = wc_HmacSetKey(&hmac, WC_SHA256, prk, WC_SHA256_DIGEST_SIZE);
+    _ksm_zero(prk, sizeof(prk));
+    if (ret != 0) { wc_HmacFree(&hmac); return ret; }
+
+    info_counter[0] = 0x01;
+    ret = wc_HmacUpdate(&hmac, info_counter, 1);
+    if (ret != 0) { wc_HmacFree(&hmac); return ret; }
+
+    ret = wc_HmacFinal(&hmac, okm);
+    wc_HmacFree(&hmac);
+
+    return ret;
 }
 
 int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
@@ -362,6 +495,7 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
 {
     ksm_slot_t* slot;
     int ret;
+    int result;
 
     if (peerPub == NULL || secret == NULL || secretLen == NULL) {
         return KSM_E_INVALID;
@@ -371,8 +505,11 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     slot = _ksm_slot_get(&_ksm, id);
     if (slot == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
@@ -381,15 +518,27 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
         case KSM_TYPE_ECC_P384:
         {
             ecc_key peer;
+            byte raw_secret[64];
+            word32 raw_len = sizeof(raw_secret);
+
             ret = wc_ecc_init(&peer);
             if (ret == 0) {
                 ret = wc_ecc_import_x963(peerPub, peerLen, &peer);
                 if (ret == 0) {
                     ret = wc_ecc_shared_secret(&slot->key.ecc, &peer,
-                                               secret, secretLen);
+                                               raw_secret, &raw_len);
+                    if (ret == 0) {
+                        /* Apply HKDF to normalize output */
+                        ret = _ksm_hkdf_sha256(raw_secret, raw_len,
+                                               secret, *secretLen);
+                        if (ret == 0 && *secretLen > WC_SHA256_DIGEST_SIZE) {
+                            *secretLen = WC_SHA256_DIGEST_SIZE;
+                        }
+                    }
                 }
                 wc_ecc_free(&peer);
             }
+            _ksm_zero(raw_secret, sizeof(raw_secret));
             break;
         }
 
@@ -397,27 +546,41 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
         case KSM_TYPE_X25519:
         {
             curve25519_key peer;
+            byte raw_secret[CURVE25519_KEYSIZE];
+            word32 raw_len = sizeof(raw_secret);
+
             ret = wc_curve25519_init(&peer);
             if (ret == 0) {
                 ret = wc_curve25519_import_public_ex(peerPub, peerLen, &peer,
                                                      EC25519_LITTLE_ENDIAN);
                 if (ret == 0) {
                     ret = wc_curve25519_shared_secret_ex(&slot->key.x25519,
-                                                         &peer, secret,
-                                                         secretLen,
+                                                         &peer, raw_secret,
+                                                         &raw_len,
                                                          EC25519_LITTLE_ENDIAN);
+                    if (ret == 0) {
+                        ret = _ksm_hkdf_sha256(raw_secret, raw_len,
+                                               secret, *secretLen);
+                        if (ret == 0 && *secretLen > WC_SHA256_DIGEST_SIZE) {
+                            *secretLen = WC_SHA256_DIGEST_SIZE;
+                        }
+                    }
                 }
                 wc_curve25519_free(&peer);
             }
+            _ksm_zero(raw_secret, sizeof(raw_secret));
             break;
         }
 #endif
 
         default:
+            KSM_UNLOCK();
             return KSM_E_TYPE_MISMATCH;
     }
 
-    return (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    result = (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
+    KSM_UNLOCK();
+    return result;
 }
 
 /* ============================================================
@@ -436,7 +599,7 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
 {
     ksm_slot_t* slot;
     ksm_slot_t* wrap_slot;
-    byte key_data[512];  /* Temp buffer for serialized key */
+    byte key_data[2560];  /* Sized for RSA-4096 DER + margin */
     word32 key_len = sizeof(key_data);
     byte iv[KSM_WRAP_IV_SIZE];
     byte tag[KSM_WRAP_TAG_SIZE];
@@ -452,15 +615,19 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
         return KSM_E_NOT_INIT;
     }
 
+    KSM_LOCK();
+
     slot = _ksm_slot_get(&_ksm, id);
     wrap_slot = _ksm_slot_get(&_ksm, wrap_key_id);
 
     if (slot == NULL || wrap_slot == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
     if (wrap_slot->type != KSM_TYPE_AES_128 &&
         wrap_slot->type != KSM_TYPE_AES_256) {
+        KSM_UNLOCK();
         return KSM_E_TYPE_MISMATCH;
     }
 
@@ -504,11 +671,13 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
             break;
 
         default:
+            KSM_UNLOCK();
             return KSM_E_UNSUPPORTED;
     }
 
     if (ret != 0) {
         _ksm_zero(key_data, sizeof(key_data));
+        KSM_UNLOCK();
         return KSM_E_CRYPTO;
     }
 
@@ -517,6 +686,7 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
     if (*len < needed) {
         _ksm_zero(key_data, sizeof(key_data));
         *len = needed;
+        KSM_UNLOCK();
         return KSM_E_BUFFER;
     }
 
@@ -524,6 +694,7 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
     ret = wc_RNG_GenerateBlock(&_ksm.rng, iv, KSM_WRAP_IV_SIZE);
     if (ret != 0) {
         _ksm_zero(key_data, sizeof(key_data));
+        KSM_UNLOCK();
         return KSM_E_RNG;
     }
 
@@ -547,7 +718,7 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
                                    key_data, key_len,
                                    iv, KSM_WRAP_IV_SIZE,
                                    tag, KSM_WRAP_TAG_SIZE,
-                                   out, 8);  /* AAD = type + len */
+                                   out, KSM_WRAP_HEADER_SIZE);  /* AAD = type + len + IV */
         }
         wc_AesFree(&aes);
     }
@@ -559,10 +730,12 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
     _ksm_zero(key_data, sizeof(key_data));
 
     if (ret != 0) {
+        KSM_UNLOCK();
         return KSM_E_WRAP;
     }
 
     *len = needed;
+    KSM_UNLOCK();
     return KSM_SUCCESS;
 }
 
@@ -573,7 +746,7 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
     ksm_slot_t* wrap_slot;
     ksm_slot_t* new_slot;
     ksm_key_id new_id;
-    byte key_data[512];
+    byte key_data[2560];  /* Sized for RSA-4096 DER + margin */
     word32 key_len;
     ksm_key_type stored_type;
     byte iv[KSM_WRAP_IV_SIZE];
@@ -594,13 +767,17 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
         return KSM_E_INVALID;
     }
 
+    KSM_LOCK();
+
     wrap_slot = _ksm_slot_get(&_ksm, wrap_key_id);
     if (wrap_slot == NULL) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
     if (wrap_slot->type != KSM_TYPE_AES_128 &&
         wrap_slot->type != KSM_TYPE_AES_256) {
+        KSM_UNLOCK();
         return KSM_E_TYPE_MISMATCH;
     }
 
@@ -617,14 +794,17 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
               ((word32)wrapped[7]);
 
     if (stored_type != type) {
+        KSM_UNLOCK();
         return KSM_E_TYPE_MISMATCH;
     }
 
     if (len != KSM_WRAP_HEADER_SIZE + key_len + KSM_WRAP_TAG_SIZE) {
+        KSM_UNLOCK();
         return KSM_E_INVALID;
     }
 
     if (key_len > sizeof(key_data)) {
+        KSM_UNLOCK();
         return KSM_E_BUFFER;
     }
 
@@ -640,13 +820,14 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
                                    wrapped + KSM_WRAP_HEADER_SIZE, key_len,
                                    iv, KSM_WRAP_IV_SIZE,
                                    tag, KSM_WRAP_TAG_SIZE,
-                                   wrapped, 8);  /* AAD = type + len */
+                                   wrapped, KSM_WRAP_HEADER_SIZE);  /* AAD = type + len + IV */
         }
         wc_AesFree(&aes);
     }
 
     if (ret != 0) {
         _ksm_zero(key_data, sizeof(key_data));
+        KSM_UNLOCK();
         return KSM_E_WRAP;
     }
 
@@ -654,6 +835,7 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
     new_id = _ksm_slot_alloc(&_ksm);
     if (new_id == KSM_KEY_INVALID) {
         _ksm_zero(key_data, sizeof(key_data));
+        KSM_UNLOCK();
         return KSM_E_FULL;
     }
 
@@ -727,9 +909,11 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
 
     if (ret != 0) {
         _ksm_slot_free(&_ksm, new_id);
+        KSM_UNLOCK();
         return KSM_E_CRYPTO;
     }
 
     *id = new_id;
+    KSM_UNLOCK();
     return KSM_SUCCESS;
 }

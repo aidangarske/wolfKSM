@@ -8,23 +8,31 @@
 
 #include "ksm_internal.h"
 
-ksm_key_id _ksm_slot_alloc(ksm_state_t* state)
+/* Initialize free list - call during ksm_init */
+void _ksm_slot_init_freelist(ksm_state_t* state)
 {
     int i;
+    for (i = 0; i < KSM_MAX_KEYS - 1; i++) {
+        state->slots[i].next_free = i + 1;
+    }
+    state->slots[KSM_MAX_KEYS - 1].next_free = -1;
+    state->free_head = 0;
+}
 
-    if (state == NULL) {
+ksm_key_id _ksm_slot_alloc(ksm_state_t* state)
+{
+    int idx;
+
+    if (state == NULL || state->free_head < 0) {
         return KSM_KEY_INVALID;
     }
 
-    for (i = 0; i < KSM_MAX_KEYS; i++) {
-        if (!state->slots[i].active) {
-            state->slots[i].active = 1;
-            /* Return 1-based ID (0 is KSM_KEY_INVALID) */
-            return (ksm_key_id)(i + 1);
-        }
-    }
+    idx = state->free_head;
+    state->free_head = state->slots[idx].next_free;
+    state->slots[idx].active = 1;
+    state->slots[idx].next_free = -1;
 
-    return KSM_KEY_INVALID;
+    return (ksm_key_id)(idx + 1);
 }
 
 ksm_slot_t* _ksm_slot_get(ksm_state_t* state, ksm_key_id id)
@@ -47,12 +55,14 @@ ksm_slot_t* _ksm_slot_get(ksm_state_t* state, ksm_key_id id)
 void _ksm_slot_free(ksm_state_t* state, ksm_key_id id)
 {
     ksm_slot_t* slot;
+    int idx;
 
     if (state == NULL || id == KSM_KEY_INVALID || id > KSM_MAX_KEYS) {
         return;
     }
 
-    slot = &state->slots[id - 1];
+    idx = id - 1;
+    slot = &state->slots[idx];
 
     if (!slot->active) {
         return;
@@ -84,7 +94,6 @@ void _ksm_slot_free(ksm_state_t* state, ksm_key_id id)
 
         case KSM_TYPE_AES_128:
         case KSM_TYPE_AES_256:
-            /* Symmetric keys are just byte arrays, handled by zero below */
             break;
 
         default:
@@ -93,7 +102,11 @@ void _ksm_slot_free(ksm_state_t* state, ksm_key_id id)
 
     /* Secure zero entire slot */
     _ksm_zero(slot, sizeof(ksm_slot_t));
+
+    /* Add to free list */
     slot->active = 0;
+    slot->next_free = state->free_head;
+    state->free_head = idx;
 }
 
 void _ksm_slot_free_all(ksm_state_t* state)

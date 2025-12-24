@@ -21,6 +21,15 @@
 #include <wolfssl/wolfcrypt/curve25519.h>
 #endif
 
+/* Threading support */
+#if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+    #include <pthread.h>
+    #define KSM_HAVE_PTHREAD
+#elif defined(_WIN32)
+    #include <windows.h>
+    #define KSM_HAVE_WIN32_THREADS
+#endif
+
 #include <wolfksm/ksm.h>
 
 /* Maximum concurrent keys */
@@ -33,6 +42,7 @@ typedef struct {
     ksm_key_type type;
     byte         active;
     byte         _pad[2];
+    int          next_free;  /* Index of next free slot when inactive */
     union {
         ecc_key    ecc;
         RsaKey     rsa;
@@ -51,9 +61,15 @@ typedef struct {
 typedef struct {
     ksm_slot_t  slots[KSM_MAX_KEYS];
     WC_RNG      rng;
+    int         free_head;    /* Index of first free slot, -1 if full */
     byte        initialized;
     byte        mem_locked;
     byte        _pad[2];
+#ifdef KSM_HAVE_PTHREAD
+    pthread_mutex_t lock;
+#elif defined(KSM_HAVE_WIN32_THREADS)
+    CRITICAL_SECTION lock;
+#endif
 } ksm_state_t;
 
 /* ============================================================
@@ -79,6 +95,11 @@ void _ksm_zero(void* ptr, size_t len);
 /* ============================================================
  * Slot Management (ksm_slot.c)
  * ============================================================ */
+
+/**
+ * Initialize free list - call during ksm_init.
+ */
+void _ksm_slot_init_freelist(ksm_state_t* state);
 
 /**
  * Allocate a free slot.

@@ -12,6 +12,7 @@
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/sha256.h>
 #include <wolfksm/ksm.h>
+#include "../src/ksm_internal.h"  /* For KSM_MAX_KEYS */
 
 #define TEST_PASS 0
 #define TEST_FAIL 1
@@ -333,6 +334,302 @@ static int test_aes_key(void)
 }
 
 /* ============================================================
+ * Test: ECC P-384 Key Generation
+ * ============================================================ */
+static int test_ecc_p384(void)
+{
+    ksm_key_id key;
+    byte pub[97];
+    word32 publen = sizeof(pub);
+
+    if (ksm_generate(KSM_TYPE_ECC_P384, &key) != KSM_SUCCESS) return TEST_FAIL;
+    if (ksm_export_pubkey(key, pub, &publen) != KSM_SUCCESS) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    if (publen != 97 || pub[0] != 0x04) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    ksm_destroy(key);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: RSA-4096 Sign
+ * ============================================================ */
+static int test_rsa_4096(void)
+{
+    ksm_key_id key;
+    byte hash[32], sig[512];
+    word32 siglen = sizeof(sig);
+
+    memset(hash, 0x55, sizeof(hash));
+    if (ksm_generate(KSM_TYPE_RSA_4096, &key) != KSM_SUCCESS) return TEST_FAIL;
+    if (ksm_sign(key, hash, sizeof(hash), sig, &siglen) != KSM_SUCCESS) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    if (siglen != 512) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    ksm_destroy(key);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: AES-128 Key Generation
+ * ============================================================ */
+static int test_aes_128(void)
+{
+    ksm_key_id key;
+    ksm_key_type type;
+
+    if (ksm_generate(KSM_TYPE_AES_128, &key) != KSM_SUCCESS) return TEST_FAIL;
+    if (ksm_get_type(key, &type) != KSM_SUCCESS || type != KSM_TYPE_AES_128) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    ksm_destroy(key);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Null Pointer Handling
+ * ============================================================ */
+static int test_null_pointers(void)
+{
+    ksm_key_id key;
+    byte buf[64];
+    word32 len = sizeof(buf);
+
+    if (ksm_generate(KSM_TYPE_ECC_P256, NULL) != KSM_E_INVALID) return TEST_FAIL;
+
+    ksm_generate(KSM_TYPE_ECC_P256, &key);
+    if (ksm_get_type(key, NULL) != KSM_E_INVALID) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    if (ksm_export_pubkey(key, NULL, &len) != KSM_E_INVALID) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    if (ksm_export_pubkey(key, buf, NULL) != KSM_E_INVALID) {
+        ksm_destroy(key);
+        return TEST_FAIL;
+    }
+    ksm_destroy(key);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Invalid Handle Handling
+ * ============================================================ */
+static int test_invalid_handles(void)
+{
+    ksm_key_type type;
+
+    if (ksm_get_type(0, &type) != KSM_E_INVALID) return TEST_FAIL;
+    if (ksm_get_type(KSM_MAX_KEYS + 1, &type) != KSM_E_INVALID) return TEST_FAIL;
+    if (ksm_destroy(0) != KSM_E_INVALID) return TEST_FAIL;
+    if (ksm_destroy(99) != KSM_E_INVALID) return TEST_FAIL;
+
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Type Mismatch Errors
+ * ============================================================ */
+static int test_type_mismatch(void)
+{
+    ksm_key_id ecc_key, aes_key;
+    byte buf[256];
+    word32 len = sizeof(buf);
+
+    ksm_generate(KSM_TYPE_ECC_P256, &ecc_key);
+    ksm_generate(KSM_TYPE_AES_256, &aes_key);
+
+    /* Sign with AES key should fail */
+    if (ksm_sign(aes_key, buf, 32, buf, &len) != KSM_E_TYPE_MISMATCH) {
+        ksm_destroy(ecc_key);
+        ksm_destroy(aes_key);
+        return TEST_FAIL;
+    }
+
+    /* Decrypt with ECC key should fail */
+    len = sizeof(buf);
+    if (ksm_decrypt(ecc_key, buf, 256, buf, &len) != KSM_E_TYPE_MISMATCH) {
+        ksm_destroy(ecc_key);
+        ksm_destroy(aes_key);
+        return TEST_FAIL;
+    }
+
+    /* Export pubkey from AES should fail */
+    len = sizeof(buf);
+    if (ksm_export_pubkey(aes_key, buf, &len) != KSM_E_TYPE_MISMATCH) {
+        ksm_destroy(ecc_key);
+        ksm_destroy(aes_key);
+        return TEST_FAIL;
+    }
+
+    ksm_destroy(ecc_key);
+    ksm_destroy(aes_key);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Double Destroy
+ * ============================================================ */
+static int test_double_destroy(void)
+{
+    ksm_key_id key;
+
+    ksm_generate(KSM_TYPE_ECC_P256, &key);
+    if (ksm_destroy(key) != KSM_SUCCESS) return TEST_FAIL;
+    if (ksm_destroy(key) != KSM_E_INVALID) return TEST_FAIL;
+
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Wrapped Import with Wrong Key
+ * ============================================================ */
+static int test_wrapped_wrong_key(void)
+{
+    ksm_key_id wrap1, wrap2, orig, imported;
+    byte wrapped[1024];
+    word32 len = sizeof(wrapped);
+
+    ksm_generate(KSM_TYPE_AES_256, &wrap1);
+    ksm_generate(KSM_TYPE_AES_256, &wrap2);
+    ksm_generate(KSM_TYPE_ECC_P256, &orig);
+
+    ksm_export_wrapped(orig, wrap1, wrapped, &len);
+
+    /* Import with wrong key must fail */
+    if (ksm_import_wrapped(wrapped, len, wrap2, KSM_TYPE_ECC_P256, &imported) == KSM_SUCCESS) {
+        ksm_destroy(imported);
+        ksm_destroy(wrap1);
+        ksm_destroy(wrap2);
+        ksm_destroy(orig);
+        return TEST_FAIL;
+    }
+
+    ksm_destroy(wrap1);
+    ksm_destroy(wrap2);
+    ksm_destroy(orig);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Wrapped Data Tampered
+ * ============================================================ */
+static int test_wrapped_tampered(void)
+{
+    ksm_key_id wrap, orig, imported;
+    byte wrapped[1024];
+    word32 len = sizeof(wrapped);
+
+    ksm_generate(KSM_TYPE_AES_256, &wrap);
+    ksm_generate(KSM_TYPE_ECC_P256, &orig);
+
+    ksm_export_wrapped(orig, wrap, wrapped, &len);
+
+    /* Flip bit in ciphertext */
+    wrapped[30] ^= 0x01;
+    if (ksm_import_wrapped(wrapped, len, wrap, KSM_TYPE_ECC_P256, &imported) == KSM_SUCCESS) {
+        ksm_destroy(imported);
+        ksm_destroy(wrap);
+        ksm_destroy(orig);
+        return TEST_FAIL;
+    }
+    wrapped[30] ^= 0x01;
+
+    /* Flip bit in tag */
+    wrapped[len - 1] ^= 0x01;
+    if (ksm_import_wrapped(wrapped, len, wrap, KSM_TYPE_ECC_P256, &imported) == KSM_SUCCESS) {
+        ksm_destroy(imported);
+        ksm_destroy(wrap);
+        ksm_destroy(orig);
+        return TEST_FAIL;
+    }
+
+    ksm_destroy(wrap);
+    ksm_destroy(orig);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Wrapped Import Type Mismatch
+ * ============================================================ */
+static int test_wrapped_type_mismatch(void)
+{
+    ksm_key_id wrap, ecc, imported;
+    byte wrapped[1024];
+    word32 len = sizeof(wrapped);
+
+    ksm_generate(KSM_TYPE_AES_256, &wrap);
+    ksm_generate(KSM_TYPE_ECC_P256, &ecc);
+
+    ksm_export_wrapped(ecc, wrap, wrapped, &len);
+
+    /* Import as wrong type must fail */
+    if (ksm_import_wrapped(wrapped, len, wrap, KSM_TYPE_RSA_2048, &imported) != KSM_E_TYPE_MISMATCH) {
+        if (imported != KSM_KEY_INVALID) ksm_destroy(imported);
+        ksm_destroy(wrap);
+        ksm_destroy(ecc);
+        return TEST_FAIL;
+    }
+
+    ksm_destroy(wrap);
+    ksm_destroy(ecc);
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Double Init (should be idempotent)
+ * ============================================================ */
+static int test_double_init(void)
+{
+    /* Already init'd in main, second init should succeed (idempotent) */
+    if (ksm_init() != KSM_SUCCESS) return TEST_FAIL;
+    return TEST_PASS;
+}
+
+/* ============================================================
+ * Test: Slot Exhaustion
+ * ============================================================ */
+static int test_slot_exhaustion(void)
+{
+    ksm_key_id keys[KSM_MAX_KEYS + 1];
+    int i;
+
+    for (i = 0; i < KSM_MAX_KEYS; i++) {
+        if (ksm_generate(KSM_TYPE_AES_128, &keys[i]) != KSM_SUCCESS) {
+            while (--i >= 0) ksm_destroy(keys[i]);
+            return TEST_FAIL;
+        }
+    }
+
+    /* 33rd should fail */
+    if (ksm_generate(KSM_TYPE_AES_128, &keys[KSM_MAX_KEYS]) != KSM_E_FULL) {
+        for (i = 0; i < KSM_MAX_KEYS; i++) ksm_destroy(keys[i]);
+        return TEST_FAIL;
+    }
+
+    /* Free one, should succeed now */
+    ksm_destroy(keys[0]);
+    if (ksm_generate(KSM_TYPE_AES_128, &keys[0]) != KSM_SUCCESS) {
+        for (i = 1; i < KSM_MAX_KEYS; i++) ksm_destroy(keys[i]);
+        return TEST_FAIL;
+    }
+
+    for (i = 0; i < KSM_MAX_KEYS; i++) ksm_destroy(keys[i]);
+    return TEST_PASS;
+}
+
+/* ============================================================
  * Main
  * ============================================================ */
 int main(void)
@@ -349,6 +646,8 @@ int main(void)
     }
 
     printf("Running tests:\n");
+
+    /* Original tests */
     RUN_TEST(test_generate_ecc_p256);
     RUN_TEST(test_export_pubkey);
     RUN_TEST(test_sign_verify);
@@ -357,6 +656,26 @@ int main(void)
     RUN_TEST(test_destroy_invalidates);
     RUN_TEST(test_rsa_sign);
     RUN_TEST(test_aes_key);
+
+    /* Key type tests */
+    RUN_TEST(test_ecc_p384);
+    RUN_TEST(test_rsa_4096);
+    RUN_TEST(test_aes_128);
+
+    /* Error path tests */
+    RUN_TEST(test_null_pointers);
+    RUN_TEST(test_invalid_handles);
+    RUN_TEST(test_type_mismatch);
+    RUN_TEST(test_double_destroy);
+
+    /* Security tests */
+    RUN_TEST(test_wrapped_wrong_key);
+    RUN_TEST(test_wrapped_tampered);
+    RUN_TEST(test_wrapped_type_mismatch);
+
+    /* Lifecycle tests */
+    RUN_TEST(test_double_init);
+    RUN_TEST(test_slot_exhaustion);
 
     ksm_shutdown();
 
