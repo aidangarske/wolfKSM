@@ -7,12 +7,14 @@
 #ifndef WOLFKSM_INTERNAL_H
 #define WOLFKSM_INTERNAL_H
 
+#include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/types.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/aes.h>
+#include <wolfssl/wolfcrypt/asn_public.h>
 
 #ifdef HAVE_ED25519
 #include <wolfssl/wolfcrypt/ed25519.h>

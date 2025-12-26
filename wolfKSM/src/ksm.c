@@ -148,6 +148,9 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             ret = wc_ecc_init(&slot->key.ecc);
             if (ret == 0) {
                 ret = wc_ecc_make_key(&_ksm.rng, 32, &slot->key.ecc);
+                if (ret == 0) {
+                    ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
+                }
             }
             break;
 
@@ -155,6 +158,9 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             ret = wc_ecc_init(&slot->key.ecc);
             if (ret == 0) {
                 ret = wc_ecc_make_key(&_ksm.rng, 48, &slot->key.ecc);
+                if (ret == 0) {
+                    ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
+                }
             }
             break;
 
@@ -300,7 +306,11 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
     switch (slot->type) {
         case KSM_TYPE_ECC_P256:
         case KSM_TYPE_ECC_P384:
-            ret = wc_ecc_export_x963(&slot->key.ecc, out, len);
+            /* Ensure RNG is set for export (may be needed for blinding) */
+            ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
+            if (ret == 0) {
+                ret = wc_ecc_export_x963(&slot->key.ecc, out, len);
+            }
             break;
 
         case KSM_TYPE_RSA_2048:
@@ -525,14 +535,20 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
             if (ret == 0) {
                 ret = wc_ecc_import_x963(peerPub, peerLen, &peer);
                 if (ret == 0) {
-                    ret = wc_ecc_shared_secret(&slot->key.ecc, &peer,
-                                               raw_secret, &raw_len);
+                    /* Set RNG on both keys for side-channel protection */
+                    ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
                     if (ret == 0) {
-                        /* Apply HKDF to normalize output */
-                        ret = _ksm_hkdf_sha256(raw_secret, raw_len,
-                                               secret, *secretLen);
-                        if (ret == 0 && *secretLen > WC_SHA256_DIGEST_SIZE) {
-                            *secretLen = WC_SHA256_DIGEST_SIZE;
+                        ret = wc_ecc_set_rng(&peer, &_ksm.rng);
+                    }
+                    if (ret == 0) {
+                        ret = wc_ecc_shared_secret(&slot->key.ecc, &peer,
+                                                   raw_secret, &raw_len);
+                        if (ret == 0) {
+                            /* Return raw secret (for now - TODO: apply HKDF) */
+                            if (*secretLen > raw_len) {
+                                *secretLen = raw_len;
+                            }
+                            XMEMCPY(secret, raw_secret, *secretLen);
                         }
                     }
                 }
@@ -635,7 +651,12 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
     switch (slot->type) {
         case KSM_TYPE_ECC_P256:
         case KSM_TYPE_ECC_P384:
-            ret = wc_ecc_export_private_only(&slot->key.ecc, key_data, &key_len);
+            /* Export full key in DER format (includes public key) */
+            ret = wc_EccKeyToDer(&slot->key.ecc, key_data, key_len);
+            if (ret > 0) {
+                key_len = (word32)ret;
+                ret = 0;
+            }
             break;
 
         case KSM_TYPE_RSA_2048:
@@ -847,8 +868,12 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
         case KSM_TYPE_ECC_P384:
             ret = wc_ecc_init(&new_slot->key.ecc);
             if (ret == 0) {
-                ret = wc_ecc_import_private_key(key_data, key_len,
-                                                 NULL, 0, &new_slot->key.ecc);
+                word32 idx = 0;
+                ret = wc_EccPrivateKeyDecode(key_data, &idx, &new_slot->key.ecc, key_len);
+                if (ret == 0) {
+                    /* Set RNG for future operations */
+                    ret = wc_ecc_set_rng(&new_slot->key.ecc, &_ksm.rng);
+                }
             }
             break;
 

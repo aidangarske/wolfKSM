@@ -11,11 +11,11 @@ AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_MACRO_DIR([m4])
 
 AM_INIT_AUTOMAKE([foreign subdir-objects -Wall -Werror])
+AM_PROG_AR
 LT_INIT
 
 dnl Checks for programs
 AC_PROG_CC
-AC_PROG_CC_C99
 
 dnl Checks for header files
 AC_CHECK_HEADERS([sys/mman.h])
@@ -182,6 +182,7 @@ AC_CONFIG_FILES([
     src/Makefile
     include/Makefile
     tests/Makefile
+    wolfksm.pc
 ])
 
 AC_OUTPUT
