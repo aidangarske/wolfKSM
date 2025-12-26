@@ -1,6 +1,6 @@
 /* ksm_mem.c
  *
- * Copyright (C) 2024-2025 wolfSSL Inc.
+ * Copyright (C) 2006-2026 wolfSSL Inc.
  *
  * This file is part of wolfKSM.
  *
@@ -15,7 +15,7 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with wolfKSM.  If not, see <http://www.gnu.org/licenses/>.
+ * along with wolfKSM. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "ksm_internal.h"
