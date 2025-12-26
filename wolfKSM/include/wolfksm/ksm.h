@@ -1,15 +1,21 @@
 /* ksm.h
  *
- * wolfKSM - Lightweight Key Store Manager
- * Public API
+ * Copyright (C) 2024-2025 wolfSSL Inc.
  *
- * Copyright (C) 2024
- * License: GPLv2+
+ * This file is part of wolfKSM.
  *
- * Minimal C wrapper around wolfCrypt that holds private keys in protected
- * memory. Keys are generated on-site and never exposed - only opaque handles
- * cross the API boundary. Operations (sign, decrypt, ECDH) happen inside
- * wolfKSM; only results leave.
+ * wolfKSM is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfKSM is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with wolfKSM.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef WOLFKSM_H
