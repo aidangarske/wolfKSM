@@ -33,8 +33,14 @@
 #ifdef HAVE_ED25519
 #include <wolfssl/wolfcrypt/ed25519.h>
 #endif
+#ifdef HAVE_ED448
+#include <wolfssl/wolfcrypt/ed448.h>
+#endif
 #ifdef HAVE_CURVE25519
 #include <wolfssl/wolfcrypt/curve25519.h>
+#endif
+#ifdef HAVE_CURVE448
+#include <wolfssl/wolfcrypt/curve448.h>
 #endif
 
 /* Threading support */
@@ -65,8 +71,14 @@ typedef struct {
 #ifdef HAVE_ED25519
         ed25519_key ed;
 #endif
+#ifdef HAVE_ED448
+        ed448_key ed448;
+#endif
 #ifdef HAVE_CURVE25519
         curve25519_key x25519;
+#endif
+#ifdef HAVE_CURVE448
+        curve448_key x448;
 #endif
         byte       sym[32];  /* AES key material */
     } key;

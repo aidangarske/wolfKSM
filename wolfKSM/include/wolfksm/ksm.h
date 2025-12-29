@@ -38,12 +38,31 @@ typedef word32 ksm_key_id;
 
 /* Supported key types */
 typedef enum {
-    KSM_TYPE_ECC_P256,      /* ECDSA/ECDH secp256r1 */
-    KSM_TYPE_ECC_P384,      /* ECDSA/ECDH secp384r1 */
+    /* ECC Curves (NIST) */
+    KSM_TYPE_ECC_P192,      /* ECDSA/ECDH secp192r1 (NIST P-192) */
+    KSM_TYPE_ECC_P224,      /* ECDSA/ECDH secp224r1 (NIST P-224) */
+    KSM_TYPE_ECC_P256,      /* ECDSA/ECDH secp256r1 (NIST P-256) */
+    KSM_TYPE_ECC_P384,      /* ECDSA/ECDH secp384r1 (NIST P-384) */
+    KSM_TYPE_ECC_P521,      /* ECDSA/ECDH secp521r1 (NIST P-521) */
+
+    /* ECC Curves (Other) */
+    KSM_TYPE_ECC_SECP256K1, /* ECDSA/ECDH secp256k1 (Bitcoin/Ethereum) */
+
+    /* RSA */
+    KSM_TYPE_RSA_1024,      /* RSA 1024-bit (legacy, not recommended) */
     KSM_TYPE_RSA_2048,      /* RSA 2048-bit */
+    KSM_TYPE_RSA_3072,      /* RSA 3072-bit */
     KSM_TYPE_RSA_4096,      /* RSA 4096-bit */
-    KSM_TYPE_ED25519,       /* EdDSA signing */
-    KSM_TYPE_X25519,        /* X25519 key exchange */
+
+    /* Edwards Curves */
+    KSM_TYPE_ED25519,       /* EdDSA signing (Curve25519) */
+    KSM_TYPE_ED448,         /* EdDSA signing (Curve448) */
+
+    /* Montgomery Curves */
+    KSM_TYPE_X25519,        /* X25519 ECDH (Curve25519) */
+    KSM_TYPE_X448,          /* X448 ECDH (Curve448) */
+
+    /* Symmetric Keys */
     KSM_TYPE_AES_128,       /* AES-128 symmetric (for wrapping) */
     KSM_TYPE_AES_256        /* AES-256 symmetric (for wrapping) */
 } ksm_key_type;

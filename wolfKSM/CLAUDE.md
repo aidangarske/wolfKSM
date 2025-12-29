@@ -22,15 +22,62 @@ Claude MUST request approval for:
 
 ## Project Overview
 
-wolfKSM is a lightweight key store manager wrapping wolfCrypt. The core security invariant: **private key bytes NEVER cross the API boundary**. Only opaque handles (`ksm_key_id`), public keys, signatures, and cryptographic results leave the library.
+wolfKSM is a **fully transparent** key store manager that provides cryptographic operations WITHOUT exposing private keys to applications. The ultimate goal: applications never see, touch, or manage key material - they just request operations and wolfKSM handles everything internally.
+
+### Core Security Invariant
+**Private key bytes NEVER cross the API boundary.** Applications cannot:
+- See private key bytes
+- Export private keys (except encrypted via wrapped export)
+- Pass key handles between processes
+- Accidentally leak keys through memory dumps or crashes
+
+### Vision: Fully Implicit Key Management
+
+Applications use **standard wolfCrypt APIs** without modification. wolfKSM intercepts operations transparently via the crypto callback framework:
+
+```c
+// Application perspective: Just normal wolfCrypt calls
+wc_ecc_sign_hash(hash, hashLen, sig, &sigLen, NULL);  // No key visible!
+wc_ecc_shared_secret(NULL, peerKey, secret, &secretLen);
+
+// Behind the scenes: wolfKSM handles EVERYTHING
+// - Selects appropriate key based on algorithm/curve
+// - Performs operation in secure storage
+// - Returns only the cryptographic result
+// - Private key NEVER exposed
+```
+
+**No key handles. No key management. Just secure crypto.**
 
 ## Architecture
 
+### Standalone wolfKSM Library
 ```
 ksm.h (public API) → ksm.c (dispatch) → ksm_slot.c (slot management)
                                       → ksm_mem.c (mlock/secure zero)
                                       → wolfCrypt (crypto operations)
 ```
+
+### wolfSSL Integration (Primary Use Case)
+```
+Application (wolfSSH, TLS server, etc.)
+    ↓
+wolfCrypt API (wc_ecc_sign_hash, wc_RsaSSL_Sign)
+    ↓
+#ifdef HAVE_WOLFKSM
+    if (devId == WOLFKSM_DEVID)  ← Already in wolfCrypt!
+        ↓
+    wc_CryptoCb_* (crypto callback framework)
+        ↓
+    wolfKSM_CryptoDevCb (in wolfssl/wolfcrypt/src/ksm_cryptocb.c)
+        ↓
+    ksm_sign() / ksm_ecdh() / ksm_decrypt()
+        ↓
+    Private keys NEVER leave wolfKSM
+#endif
+```
+
+**Key Point**: Applications use unmodified wolfCrypt APIs. wolfKSM integration is transparent via crypto callbacks.
 
 **Key files:**
 - `include/wolfksm/ksm.h` - Public API (lifecycle, generate, sign, export)
@@ -40,6 +87,23 @@ ksm.h (public API) → ksm.c (dispatch) → ksm_slot.c (slot management)
 - `src/ksm_mem.c` - Memory locking (`_ksm_mlock`), secure zeroing (`_ksm_zero`)
 - `src/ksm_internal.h` - Internal slot structure, global state
 
+**Supported Algorithms:**
+
+Core Library (via `libwolfksm`):
+- ECC: P-256, P-384 (ECDSA sign + ECDH)
+- RSA: 2048-bit, 4096-bit (sign + decrypt)
+- Ed25519: EdDSA signing
+- X25519: ECDH key exchange
+- AES: 128-bit, 256-bit (for key wrapping)
+
+wolfSSL Integration (via crypto callback, when built with `--enable-ksm`):
+- ✅ ECC P-256/P-384 via `wolfKSM_EccSignHash()`, `wolfKSM_EccDhAgree()`
+- ✅ RSA 2048/4096 via `wolfKSM_RsaSign()`, `wolfKSM_RsaDecrypt()`
+- ✅ Ed25519 via `wolfKSM_Ed25519Sign()`
+- ✅ X25519 via `wolfKSM_X25519SharedSecret()`
+
+See `ALGORITHM_EXAMPLES_PLAN.md` for expansion roadmap.
+
 **Memory protection:**
 - Keys stored in `mmap(MAP_LOCKED)` memory to prevent swapping
 - Volatile writes + asm barrier prevent compiler-optimized zeroing
@@ -47,26 +111,102 @@ ksm.h (public API) → ksm.c (dispatch) → ksm_slot.c (slot management)
 
 ## Build System
 
-### Standard Build
+### Bootstrap Build (First Time Only)
+
+Due to circular dependency (wolfSSL --enable-ksm needs wolfKSM, wolfKSM needs wolfSSL), use this build sequence:
+
+**Step 1: Build wolfSSL WITHOUT --enable-ksm**
 ```bash
-./configure --with-wolfssl=/path/to/wolfssl
-make && make check
+cd /path/to/wolfssl
+./autogen.sh  # if from git
+./configure \
+    --enable-keygen \
+    --enable-aesgcm \
+    --enable-hkdf \
+    --enable-curve25519 \
+    --enable-ed25519 \
+    --enable-cryptocb
+make
+sudo make install
+sudo ldconfig
+```
+
+**Step 2: Build and install wolfKSM**
+```bash
+cd /path/to/wolfKSM
+./autogen.sh  # if from git
+./configure
+make
+make check
+sudo make install
+sudo ldconfig
+```
+
+**Step 3: Rebuild wolfSSL WITH --enable-ksm**
+```bash
+cd /path/to/wolfssl
+make clean
+./configure \
+    --enable-keygen \
+    --enable-aesgcm \
+    --enable-hkdf \
+    --enable-curve25519 \
+    --enable-ed25519 \
+    --enable-cryptocb \
+    --enable-ksm
+make
+sudo make install
+sudo ldconfig
+```
+
+**Step 4: Test**
+```bash
+cd /path/to/wolfssl
+./examples/ksm/ksm_implicit_example
+```
+
+### After Bootstrap (Normal Development)
+
+Once both libraries are installed, rebuild either one normally:
+
+**Rebuild wolfSSL:**
+```bash
+cd /path/to/wolfssl
+make clean
+./configure \
+    --enable-keygen --enable-aesgcm --enable-hkdf \
+    --enable-curve25519 --enable-ed25519 \
+    --enable-cryptocb --enable-ksm
+make
+sudo make install
+sudo ldconfig
+```
+
+**Rebuild wolfKSM:**
+```bash
+cd /path/to/wolfKSM
+make clean
+./configure
+make
+make check
+sudo make install
+sudo ldconfig
 ```
 
 ### With Static Analysis
 ```bash
-./configure --enable-static-analysis --with-wolfssl=/path/to/wolfssl
+./configure --enable-static-analysis
 make analyze  # runs format-check + cppcheck
 ```
 
 ### With Sanitizers (Development)
 ```bash
-./configure --enable-sanitizers --with-wolfssl=/path/to/wolfssl
+./configure --enable-sanitizers
 make check
 ```
 
 ### Build Options
-- `--with-wolfssl=PATH` - Required: wolfSSL installation location
+- `--with-wolfssl=PATH` - Optional: wolfSSL installation location (default: /usr/local)
 - `--enable-tpm` / `--with-wolftpm=PATH` - TPM 2.0 backend support
 - `--enable-hsm` / `--with-wolfhsm=PATH` - HSM backend support
 - `--enable-vault` - Encrypted persistence layer
@@ -115,22 +255,142 @@ Tests cover: key generation, sign/verify, ECDH, wrapped export/import, handle in
 - `clang-analyzer-security.*` - Buffer/null pointer safety
 - `bugprone-*` - Common bug patterns
 
-## wolfCrypt Integration
+## wolfSSL Integration
 
-wolfKSM uses **only wolfCrypt** (no TLS/SSL). Required wolfSSL build options:
+### Building wolfKSM for wolfSSL Integration
+
+See the **Bootstrap Build** section above for complete build instructions.
+
+**Required wolfSSL configure options:**
 ```bash
-./configure --enable-keygen --enable-aesgcm --enable-hkdf \
-            --enable-curve25519 --enable-ed25519
+./configure \
+    --enable-keygen        # wc_MakeRsaKey, wc_ecc_make_key
+    --enable-aesgcm        # AES-GCM for key wrapping
+    --enable-hkdf          # Key derivation
+    --enable-curve25519    # X25519 support
+    --enable-ed25519       # Ed25519 support
+    --enable-cryptocb      # Crypto callback framework (required)
+    --enable-ksm           # wolfKSM integration (final build only)
 ```
 
-**Key API mappings:**
+**wolfKSM configure:**
+```bash
+./configure  # Auto-detects wolfSSL at /usr/local
+```
+
+### Using wolfKSM in Applications
+
+**Current Approach** (works now, but requires explicit key management):
+```c
+#include <wolfssl/wolfcrypt/ksm_cryptocb.h>
+
+int devId;
+wolfKSM_SetCryptoDevCb(&devId);  // Register callback
+
+// Generate key in KSM
+ksm_key_id ksmId;
+ecc_key myKey;
+wolfKSM_MakeEccKey(&myKey, NULL, 32, ECC_SECP256R1, &ksmId);
+
+// Use normal wolfCrypt API
+wc_ecc_sign_hash(hash, hashLen, sig, &sigLen, &myKey);
+// ↑ Automatically routed to KSM via crypto callback!
+
+wolfKSM_ClearCryptoDevCb(devId);
+```
+
+**Future Approach** (fully implicit - GOAL):
+```c
+#include <wolfssl/wolfcrypt/ksm_cryptocb.h>
+
+wolfKSM_SetDefaultPolicy(WC_ALGO_TYPE_PK, ECC_SECP256R1, WOLFKSM_ENABLED);
+
+// Application just uses wolfCrypt - NO key management!
+wc_ecc_sign_hash_ex(hash, hashLen, sig, &sigLen, NULL, ECC_SECP256R1);
+// ↑ NULL key - wolfKSM automatically selects and uses internal key
+```
+
+### How wolfSSL Integration Works
+
+1. **Application calls normal wolfCrypt API**: `wc_ecc_sign_hash()`
+2. **wolfCrypt checks devId**: If key has `devId == WOLFKSM_DEVID`...
+3. **Routes to crypto callback**: Calls `wc_CryptoCb_EccSign()`
+4. **Dispatches to wolfKSM**: `wolfKSM_CryptoDevCb()` handles the request
+5. **KSM performs operation**: Calls `ksm_sign()` with internal key
+6. **Returns result**: Application gets signature, private key never exposed
+
+**Zero changes to wolfCrypt core!** The crypto callback hooks already exist.
+
+## wolfCrypt API Reference
+
+wolfKSM uses **only wolfCrypt** (no TLS/SSL). Key API mappings:
+
 - ECC: `wc_ecc_make_key`, `wc_ecc_sign_hash`, `wc_ecc_shared_secret`
 - RSA: `wc_MakeRsaKey`, `wc_RsaSSL_Sign`, `wc_RsaPrivateDecrypt`
 - AES-GCM: `wc_AesGcmEncrypt/Decrypt` (for key wrapping)
 - Ed25519: `wc_ed25519_make_key`, `wc_ed25519_sign_msg`
 - X25519: `wc_curve25519_make_key`, `wc_curve25519_shared_secret_ex`
 
-See `docs/WOLFCRYPT_INTEGRATION.md` for complete API mapping.
+## Development Roadmap
+
+### Phase 1: Core wolfKSM Library ✅ COMPLETE
+- [x] Key generation (ECC P-256/P-384, RSA 2048/4096)
+- [x] Cryptographic operations (sign, ECDH, decrypt)
+- [x] Wrapped export/import for secure backup
+- [x] Memory protection (mlock, secure zeroing)
+- [x] Comprehensive test suite (20/20 tests passing)
+- [x] GPL v3 licensing with wolfSSL dual-license structure
+
+### Phase 2: wolfSSL Integration via CryptoCb ✅ IN PROGRESS
+- [x] Add `--enable-ksm` flag to wolfSSL configure.ac
+- [x] Create `ksm_cryptocb.c` following wolfTPM pattern
+- [x] Implement `wolfKSM_CryptoDevCb()` callback
+- [x] Auto-enable cryptocb when `--enable-ksm` is used
+- [x] Implement Ed25519 crypto callback support (`wolfKSM_Ed25519Sign()`)
+- [x] Implement X25519 crypto callback support (`wolfKSM_X25519SharedSecret()`)
+- [x] Example program demonstrating all supported algorithms (ECC, RSA, AES, Ed25519, X25519)
+- [ ] **TODO: Fully implicit key management** ← Next priority!
+  - [ ] Policy-based key selection (no explicit handles in apps)
+  - [ ] Context-aware key routing (TLS server key, client key, etc.)
+  - [ ] Automatic key lifecycle management
+- [ ] Integration testing with wolfSSH
+- [ ] Integration testing with TLS server/client
+
+### Phase 3: Advanced Features (Future)
+- [ ] **TPM backend** (`--enable-tpm`):
+  - Hardware-backed key storage via wolfTPM
+  - Persistent keys across reboots
+- [ ] **Vault persistence** (`--enable-vault`):
+  - Encrypted key storage on disk
+  - Master key derivation from passphrase
+- [ ] **Named key slots**:
+  - Application-defined key identifiers
+  - Multi-tenant key isolation
+- [ ] **Remote key server**:
+  - Networked key management
+  - Centralized policy enforcement
+
+### Current Focus: Fully Implicit Integration
+
+**Goal**: Make key management completely transparent. Applications should NEVER see key handles.
+
+**Current State**: Applications still manage `ecc_key`/`RsaKey` structures with `devId` markers.
+
+**Target State**:
+```c
+// Setup once per application
+wolfKSM_SetDefaultPolicy(WC_ALGO_TYPE_PK, ECC_SECP256R1, WOLFKSM_ENABLED);
+
+// Application uses standard wolfCrypt - NO key management!
+wc_ecc_sign_hash_ex(hash, hashLen, sig, &sigLen, NULL, ECC_SECP256R1);
+// ↑ NULL key pointer! wolfKSM handles everything internally
+```
+
+**Implementation Strategy**:
+1. Extend crypto callback to handle NULL key pointers
+2. Add policy engine to select appropriate KSM key based on algorithm/curve
+3. Implement context-aware routing (TLS role, key usage, etc.)
+4. Update wolfKSM API to support named contexts/slots
 
 ## Extension Points
 
@@ -139,15 +399,15 @@ See `docs/WOLFCRYPT_INTEGRATION.md` for complete API mapping.
    - Handle in `ksm_generate()`, `ksm_sign()`, `ksm_export_pubkey()`, etc.
    - Update slot union in `ksm_internal.h`
 
-2. **TPM backend:**
-   - Build with `--enable-tpm`
-   - Implement in `src/backend_tpm.c` (currently planned)
-   - Wrap wolfTPM APIs
+2. **New crypto callback operation:**
+   - Add case to `wolfKSM_CryptoDevCb()` in `ksm_cryptocb.c`
+   - Map to appropriate `ksm_*()` function
+   - Update error handling
 
-3. **Vault persistence:**
-   - Build with `--enable-vault`
-   - Implement in `src/ksm_vault.c` (currently planned)
-   - Encrypt key slots with master key
+3. **Backend integration:**
+   - Implement in `src/backend_*.c`
+   - Follow dispatch pattern in `ksm.c`
+   - Maintain API compatibility
 
 ## Security Model
 

@@ -155,6 +155,27 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
 
     /* Generate key based on type */
     switch (type) {
+        /* ECC Curves (NIST) */
+        case KSM_TYPE_ECC_P192:
+            ret = wc_ecc_init(&slot->key.ecc);
+            if (ret == 0) {
+                ret = wc_ecc_make_key(&_ksm.rng, 24, &slot->key.ecc);
+                if (ret == 0) {
+                    ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
+                }
+            }
+            break;
+
+        case KSM_TYPE_ECC_P224:
+            ret = wc_ecc_init(&slot->key.ecc);
+            if (ret == 0) {
+                ret = wc_ecc_make_key(&_ksm.rng, 28, &slot->key.ecc);
+                if (ret == 0) {
+                    ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
+                }
+            }
+            break;
+
         case KSM_TYPE_ECC_P256:
             ret = wc_ecc_init(&slot->key.ecc);
             if (ret == 0) {
@@ -175,10 +196,47 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             }
             break;
 
+        case KSM_TYPE_ECC_P521:
+            ret = wc_ecc_init(&slot->key.ecc);
+            if (ret == 0) {
+                ret = wc_ecc_make_key(&_ksm.rng, 66, &slot->key.ecc);
+                if (ret == 0) {
+                    ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
+                }
+            }
+            break;
+
+        case KSM_TYPE_ECC_SECP256K1:
+            ret = wc_ecc_init(&slot->key.ecc);
+            if (ret == 0) {
+                ret = wc_ecc_make_key(&_ksm.rng, 32, &slot->key.ecc);
+                if (ret == 0) {
+                    ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
+                }
+            }
+            break;
+
+        /* RSA */
+        case KSM_TYPE_RSA_1024:
+            ret = wc_InitRsaKey(&slot->key.rsa, NULL);
+            if (ret == 0) {
+                ret = wc_MakeRsaKey(&slot->key.rsa, 1024, WC_RSA_EXPONENT,
+                                    &_ksm.rng);
+            }
+            break;
+
         case KSM_TYPE_RSA_2048:
             ret = wc_InitRsaKey(&slot->key.rsa, NULL);
             if (ret == 0) {
                 ret = wc_MakeRsaKey(&slot->key.rsa, 2048, WC_RSA_EXPONENT,
+                                    &_ksm.rng);
+            }
+            break;
+
+        case KSM_TYPE_RSA_3072:
+            ret = wc_InitRsaKey(&slot->key.rsa, NULL);
+            if (ret == 0) {
+                ret = wc_MakeRsaKey(&slot->key.rsa, 3072, WC_RSA_EXPONENT,
                                     &_ksm.rng);
             }
             break;
@@ -191,6 +249,7 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             }
             break;
 
+        /* Edwards Curves */
 #ifdef HAVE_ED25519
         case KSM_TYPE_ED25519:
             ret = wc_ed25519_init(&slot->key.ed);
@@ -201,12 +260,33 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             break;
 #endif
 
+#ifdef HAVE_ED448
+        case KSM_TYPE_ED448:
+            ret = wc_ed448_init(&slot->key.ed448);
+            if (ret == 0) {
+                ret = wc_ed448_make_key(&_ksm.rng, ED448_KEY_SIZE,
+                                        &slot->key.ed448);
+            }
+            break;
+#endif
+
+        /* Montgomery Curves */
 #ifdef HAVE_CURVE25519
         case KSM_TYPE_X25519:
             ret = wc_curve25519_init(&slot->key.x25519);
             if (ret == 0) {
                 ret = wc_curve25519_make_key(&_ksm.rng, CURVE25519_KEYSIZE,
                                              &slot->key.x25519);
+            }
+            break;
+#endif
+
+#ifdef HAVE_CURVE448
+        case KSM_TYPE_X448:
+            ret = wc_curve448_init(&slot->key.x448);
+            if (ret == 0) {
+                ret = wc_curve448_make_key(&_ksm.rng, CURVE448_KEY_SIZE,
+                                           &slot->key.x448);
             }
             break;
 #endif
@@ -315,8 +395,13 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
     }
 
     switch (slot->type) {
+        /* ECC Curves - export as X9.63 format */
+        case KSM_TYPE_ECC_P192:
+        case KSM_TYPE_ECC_P224:
         case KSM_TYPE_ECC_P256:
         case KSM_TYPE_ECC_P384:
+        case KSM_TYPE_ECC_P521:
+        case KSM_TYPE_ECC_SECP256K1:
             /* Ensure RNG is set for export (may be needed for blinding) */
             ret = wc_ecc_set_rng(&slot->key.ecc, &_ksm.rng);
             if (ret == 0) {
@@ -324,7 +409,10 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
             }
             break;
 
+        /* RSA - export as DER format */
+        case KSM_TYPE_RSA_1024:
         case KSM_TYPE_RSA_2048:
+        case KSM_TYPE_RSA_3072:
         case KSM_TYPE_RSA_4096:
             ret = wc_RsaKeyToPublicDer(&slot->key.rsa, out, *len);
             if (ret > 0) {
@@ -333,16 +421,31 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
             }
             break;
 
+        /* Edwards Curves */
 #ifdef HAVE_ED25519
         case KSM_TYPE_ED25519:
             ret = wc_ed25519_export_public(&slot->key.ed, out, len);
             break;
 #endif
 
+#ifdef HAVE_ED448
+        case KSM_TYPE_ED448:
+            ret = wc_ed448_export_public(&slot->key.ed448, out, len);
+            break;
+#endif
+
+        /* Montgomery Curves */
 #ifdef HAVE_CURVE25519
         case KSM_TYPE_X25519:
             ret = wc_curve25519_export_public_ex(&slot->key.x25519, out, len,
                                                   EC25519_LITTLE_ENDIAN);
+            break;
+#endif
+
+#ifdef HAVE_CURVE448
+        case KSM_TYPE_X448:
+            ret = wc_curve448_export_public_ex(&slot->key.x448, out, len,
+                                                EC448_LITTLE_ENDIAN);
             break;
 #endif
 
@@ -390,13 +493,21 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
     }
 
     switch (slot->type) {
+        /* ECC Curves */
+        case KSM_TYPE_ECC_P192:
+        case KSM_TYPE_ECC_P224:
         case KSM_TYPE_ECC_P256:
         case KSM_TYPE_ECC_P384:
+        case KSM_TYPE_ECC_P521:
+        case KSM_TYPE_ECC_SECP256K1:
             ret = wc_ecc_sign_hash(hash, hashLen, sig, sigLen,
                                    &_ksm.rng, &slot->key.ecc);
             break;
 
+        /* RSA */
+        case KSM_TYPE_RSA_1024:
         case KSM_TYPE_RSA_2048:
+        case KSM_TYPE_RSA_3072:
         case KSM_TYPE_RSA_4096:
             ret = wc_RsaSSL_Sign(hash, hashLen, sig, *sigLen,
                                  &slot->key.rsa, &_ksm.rng);
@@ -406,10 +517,19 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
             }
             break;
 
+        /* Edwards Curves */
 #ifdef HAVE_ED25519
         case KSM_TYPE_ED25519:
             /* Ed25519 signs message, not hash - but we accept hash for API consistency */
             ret = wc_ed25519_sign_msg(hash, hashLen, sig, sigLen, &slot->key.ed);
+            break;
+#endif
+
+#ifdef HAVE_ED448
+        case KSM_TYPE_ED448:
+            /* Ed448 signs message, not hash - but we accept hash for API consistency */
+            ret = wc_ed448_sign_msg(hash, hashLen, sig, sigLen, &slot->key.ed448,
+                                     NULL, 0);  /* No context */
             break;
 #endif
 
@@ -447,7 +567,9 @@ int ksm_decrypt(ksm_key_id id, const byte* in, word32 inLen,
     }
 
     switch (slot->type) {
+        case KSM_TYPE_RSA_1024:
         case KSM_TYPE_RSA_2048:
+        case KSM_TYPE_RSA_3072:
         case KSM_TYPE_RSA_4096:
             ret = wc_RsaPrivateDecrypt(in, inLen, out, *outLen, &slot->key.rsa);
             if (ret > 0) {
@@ -535,8 +657,13 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
     }
 
     switch (slot->type) {
+        /* ECC Curves */
+        case KSM_TYPE_ECC_P192:
+        case KSM_TYPE_ECC_P224:
         case KSM_TYPE_ECC_P256:
         case KSM_TYPE_ECC_P384:
+        case KSM_TYPE_ECC_P521:
+        case KSM_TYPE_ECC_SECP256K1:
         {
             ecc_key peer;
             byte raw_secret[64];
@@ -594,6 +721,37 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
                     }
                 }
                 wc_curve25519_free(&peer);
+            }
+            _ksm_zero(raw_secret, sizeof(raw_secret));
+            break;
+        }
+#endif
+
+#ifdef HAVE_CURVE448
+        case KSM_TYPE_X448:
+        {
+            curve448_key peer;
+            byte raw_secret[CURVE448_KEY_SIZE];
+            word32 raw_len = sizeof(raw_secret);
+
+            ret = wc_curve448_init(&peer);
+            if (ret == 0) {
+                ret = wc_curve448_import_public_ex(peerPub, peerLen, &peer,
+                                                     EC448_LITTLE_ENDIAN);
+                if (ret == 0) {
+                    ret = wc_curve448_shared_secret_ex(&slot->key.x448,
+                                                        &peer, raw_secret,
+                                                        &raw_len,
+                                                        EC448_LITTLE_ENDIAN);
+                    if (ret == 0) {
+                        ret = _ksm_hkdf_sha256(raw_secret, raw_len,
+                                               secret, *secretLen);
+                        if (ret == 0 && *secretLen > WC_SHA256_DIGEST_SIZE) {
+                            *secretLen = WC_SHA256_DIGEST_SIZE;
+                        }
+                    }
+                }
+                wc_curve448_free(&peer);
             }
             _ksm_zero(raw_secret, sizeof(raw_secret));
             break;
