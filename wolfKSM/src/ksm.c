@@ -123,6 +123,38 @@ void ksm_shutdown(void)
 }
 
 /* ============================================================
+ * Validation
+ * ============================================================ */
+
+/* Validate key type is within valid range */
+static int _ksm_validate_key_type(ksm_key_type type)
+{
+    /* Check key type is within defined enum range */
+    if (type < KSM_TYPE_ECC_P192 || type > KSM_TYPE_AES_256) {
+        return KSM_E_TYPE_MISMATCH;
+    }
+    return KSM_SUCCESS;
+}
+
+/* Validate key ID is non-zero (KSM_KEY_INVALID = 0) */
+static int _ksm_validate_key_id(ksm_key_id id)
+{
+    if (id == KSM_KEY_INVALID) {
+        return KSM_E_INVALID;
+    }
+    return KSM_SUCCESS;
+}
+
+/* Validate buffer parameters */
+static int _ksm_validate_buffer(const byte* buf, word32 len)
+{
+    if (buf == NULL && len > 0) {
+        return KSM_E_INVALID;
+    }
+    return KSM_SUCCESS;
+}
+
+/* ============================================================
  * Key Generation
  * ============================================================ */
 
@@ -139,6 +171,12 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
 
     if (!_ksm.initialized) {
         return KSM_E_NOT_INIT;
+    }
+
+    /* Validate key type */
+    ret = _ksm_validate_key_type(type);
+    if (ret != KSM_SUCCESS) {
+        return ret;
     }
 
     KSM_LOCK();
@@ -222,6 +260,9 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             if (ret == 0) {
                 ret = wc_MakeRsaKey(&slot->key.rsa, 1024, WC_RSA_EXPONENT,
                                     &_ksm.rng);
+                if (ret == 0) {
+                    ret = wc_RsaSetRNG(&slot->key.rsa, &_ksm.rng);
+                }
             }
             break;
 
@@ -230,6 +271,11 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             if (ret == 0) {
                 ret = wc_MakeRsaKey(&slot->key.rsa, 2048, WC_RSA_EXPONENT,
                                     &_ksm.rng);
+                if (ret == 0) {
+                    ret = wc_RsaSetRNG(&slot->key.rsa, &_ksm.rng);
+                    /* Prevent crypto callback routing for internal KSM keys */
+                    slot->key.rsa.devId = INVALID_DEVID;
+                }
             }
             break;
 
@@ -238,6 +284,11 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             if (ret == 0) {
                 ret = wc_MakeRsaKey(&slot->key.rsa, 3072, WC_RSA_EXPONENT,
                                     &_ksm.rng);
+                if (ret == 0) {
+                    ret = wc_RsaSetRNG(&slot->key.rsa, &_ksm.rng);
+                    /* Prevent crypto callback routing for internal KSM keys */
+                    slot->key.rsa.devId = INVALID_DEVID;
+                }
             }
             break;
 
@@ -246,6 +297,11 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
             if (ret == 0) {
                 ret = wc_MakeRsaKey(&slot->key.rsa, 4096, WC_RSA_EXPONENT,
                                     &_ksm.rng);
+                if (ret == 0) {
+                    ret = wc_RsaSetRNG(&slot->key.rsa, &_ksm.rng);
+                    /* Prevent crypto callback routing for internal KSM keys */
+                    slot->key.rsa.devId = INVALID_DEVID;
+                }
             }
             break;
 
@@ -321,9 +377,16 @@ int ksm_generate(ksm_key_type type, ksm_key_id* id)
 int ksm_destroy(ksm_key_id id)
 {
     int result;
+    int ret;
 
     if (!_ksm.initialized) {
         return KSM_E_NOT_INIT;
+    }
+
+    /* Validate key ID */
+    ret = _ksm_validate_key_id(id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
     }
 
     KSM_LOCK();
@@ -344,6 +407,7 @@ int ksm_get_type(ksm_key_id id, ksm_key_type* type)
 {
     ksm_slot_t* slot;
     int result;
+    int ret;
 
     if (type == NULL) {
         return KSM_E_INVALID;
@@ -351,6 +415,12 @@ int ksm_get_type(ksm_key_id id, ksm_key_type* type)
 
     if (!_ksm.initialized) {
         return KSM_E_NOT_INIT;
+    }
+
+    /* Validate key ID */
+    ret = _ksm_validate_key_id(id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
     }
 
     KSM_LOCK();
@@ -384,6 +454,12 @@ int ksm_export_pubkey(ksm_key_id id, byte* out, word32* len)
 
     if (!_ksm.initialized) {
         return KSM_E_NOT_INIT;
+    }
+
+    /* Validate key ID */
+    ret = _ksm_validate_key_id(id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
     }
 
     KSM_LOCK();
@@ -484,6 +560,16 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
         return KSM_E_NOT_INIT;
     }
 
+    /* Validate key ID and buffers */
+    ret = _ksm_validate_key_id(id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
+    }
+    ret = _ksm_validate_buffer(hash, hashLen);
+    if (ret != KSM_SUCCESS) {
+        return ret;
+    }
+
     KSM_LOCK();
 
     slot = _ksm_slot_get(&_ksm, id);
@@ -491,6 +577,10 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
         KSM_UNLOCK();
         return KSM_E_INVALID;
     }
+
+    /* Release lock before calling crypto operations to avoid deadlock */
+    /* The slot and key structures are stable and won't be freed */
+    KSM_UNLOCK();
 
     switch (slot->type) {
         /* ECC Curves */
@@ -534,12 +624,10 @@ int ksm_sign(ksm_key_id id, const byte* hash, word32 hashLen,
 #endif
 
         default:
-            KSM_UNLOCK();
             return KSM_E_TYPE_MISMATCH;
     }
 
     result = (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
-    KSM_UNLOCK();
     return result;
 }
 
@@ -558,6 +646,16 @@ int ksm_decrypt(ksm_key_id id, const byte* in, word32 inLen,
         return KSM_E_NOT_INIT;
     }
 
+    /* Validate key ID and buffers */
+    ret = _ksm_validate_key_id(id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
+    }
+    ret = _ksm_validate_buffer(in, inLen);
+    if (ret != KSM_SUCCESS) {
+        return ret;
+    }
+
     KSM_LOCK();
 
     slot = _ksm_slot_get(&_ksm, id);
@@ -566,25 +664,31 @@ int ksm_decrypt(ksm_key_id id, const byte* in, word32 inLen,
         return KSM_E_INVALID;
     }
 
+    /* Release lock before calling crypto operations to avoid deadlock */
+    KSM_UNLOCK();
+
     switch (slot->type) {
         case KSM_TYPE_RSA_1024:
         case KSM_TYPE_RSA_2048:
         case KSM_TYPE_RSA_3072:
         case KSM_TYPE_RSA_4096:
-            ret = wc_RsaPrivateDecrypt(in, inLen, out, *outLen, &slot->key.rsa);
-            if (ret > 0) {
-                *outLen = (word32)ret;
-                ret = 0;
+            /* Use wc_RsaFunction for RAW RSA operation (no padding handling)
+             * This allows the caller (wolfCrypt) to handle padding validation/removal */
+            ret = wc_RsaFunction(in, inLen, out, outLen, RSA_PRIVATE_DECRYPT,
+                                  &slot->key.rsa, slot->key.rsa.rng);
+            if (ret < 0) {
+                ret = KSM_E_CRYPTO;
+            }
+            else {
+                ret = 0;  /* Success - outLen is updated by wc_RsaFunction */
             }
             break;
 
         default:
-            KSM_UNLOCK();
             return KSM_E_TYPE_MISMATCH;
     }
 
     result = (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
-    KSM_UNLOCK();
     return result;
 }
 
@@ -648,6 +752,16 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
         return KSM_E_NOT_INIT;
     }
 
+    /* Validate key ID and buffers */
+    ret = _ksm_validate_key_id(id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
+    }
+    ret = _ksm_validate_buffer(peerPub, peerLen);
+    if (ret != KSM_SUCCESS) {
+        return ret;
+    }
+
     KSM_LOCK();
 
     slot = _ksm_slot_get(&_ksm, id);
@@ -655,6 +769,9 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
         KSM_UNLOCK();
         return KSM_E_INVALID;
     }
+
+    /* Release lock before calling crypto operations to avoid deadlock */
+    KSM_UNLOCK();
 
     switch (slot->type) {
         /* ECC Curves */
@@ -759,12 +876,10 @@ int ksm_ecdh(ksm_key_id id, const byte* peerPub, word32 peerLen,
 #endif
 
         default:
-            KSM_UNLOCK();
             return KSM_E_TYPE_MISMATCH;
     }
 
     result = (ret == 0) ? KSM_SUCCESS : KSM_E_CRYPTO;
-    KSM_UNLOCK();
     return result;
 }
 
@@ -798,6 +913,16 @@ int ksm_export_wrapped(ksm_key_id id, ksm_key_id wrap_key_id,
 
     if (!_ksm.initialized) {
         return KSM_E_NOT_INIT;
+    }
+
+    /* Validate both key IDs */
+    ret = _ksm_validate_key_id(id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
+    }
+    ret = _ksm_validate_key_id(wrap_key_id);
+    if (ret != KSM_SUCCESS) {
+        return ret;
     }
 
     KSM_LOCK();
@@ -955,6 +1080,12 @@ int ksm_import_wrapped(const byte* wrapped, word32 len,
 
     if (len < KSM_WRAP_HEADER_SIZE + KSM_WRAP_TAG_SIZE) {
         return KSM_E_INVALID;
+    }
+
+    /* Validate key type */
+    ret = _ksm_validate_key_type(type);
+    if (ret != KSM_SUCCESS) {
+        return ret;
     }
 
     KSM_LOCK();
