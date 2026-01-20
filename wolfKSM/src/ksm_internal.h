@@ -1,24 +1,46 @@
 /* ksm_internal.h
  *
- * wolfKSM - Internal definitions
- * Not part of public API
+ * Copyright (C) 2006-2026 wolfSSL Inc.
+ *
+ * This file is part of wolfKSM.
+ *
+ * wolfKSM is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfKSM is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with wolfKSM. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef WOLFKSM_INTERNAL_H
 #define WOLFKSM_INTERNAL_H
 
+#include <wolfssl/options.h>
 #include <wolfssl/wolfcrypt/settings.h>
 #include <wolfssl/wolfcrypt/types.h>
 #include <wolfssl/wolfcrypt/random.h>
 #include <wolfssl/wolfcrypt/ecc.h>
 #include <wolfssl/wolfcrypt/rsa.h>
 #include <wolfssl/wolfcrypt/aes.h>
+#include <wolfssl/wolfcrypt/asn_public.h>
 
 #ifdef HAVE_ED25519
 #include <wolfssl/wolfcrypt/ed25519.h>
 #endif
+#ifdef HAVE_ED448
+#include <wolfssl/wolfcrypt/ed448.h>
+#endif
 #ifdef HAVE_CURVE25519
 #include <wolfssl/wolfcrypt/curve25519.h>
+#endif
+#ifdef HAVE_CURVE448
+#include <wolfssl/wolfcrypt/curve448.h>
 #endif
 
 /* Threading support */
@@ -49,8 +71,14 @@ typedef struct {
 #ifdef HAVE_ED25519
         ed25519_key ed;
 #endif
+#ifdef HAVE_ED448
+        ed448_key ed448;
+#endif
 #ifdef HAVE_CURVE25519
         curve25519_key x25519;
+#endif
+#ifdef HAVE_CURVE448
+        curve448_key x448;
 #endif
         byte       sym[32];  /* AES key material */
     } key;

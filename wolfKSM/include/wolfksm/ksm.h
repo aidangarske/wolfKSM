@@ -1,15 +1,21 @@
 /* ksm.h
  *
- * wolfKSM - Lightweight Key Store Manager
- * Public API
+ * Copyright (C) 2006-2026 wolfSSL Inc.
  *
- * Copyright (C) 2024
- * License: GPLv2+
+ * This file is part of wolfKSM.
  *
- * Minimal C wrapper around wolfCrypt that holds private keys in protected
- * memory. Keys are generated on-site and never exposed - only opaque handles
- * cross the API boundary. Operations (sign, decrypt, ECDH) happen inside
- * wolfKSM; only results leave.
+ * wolfKSM is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * wolfKSM is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with wolfKSM. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef WOLFKSM_H
@@ -32,12 +38,31 @@ typedef word32 ksm_key_id;
 
 /* Supported key types */
 typedef enum {
-    KSM_TYPE_ECC_P256,      /* ECDSA/ECDH secp256r1 */
-    KSM_TYPE_ECC_P384,      /* ECDSA/ECDH secp384r1 */
+    /* ECC Curves (NIST) */
+    KSM_TYPE_ECC_P192,      /* ECDSA/ECDH secp192r1 (NIST P-192) */
+    KSM_TYPE_ECC_P224,      /* ECDSA/ECDH secp224r1 (NIST P-224) */
+    KSM_TYPE_ECC_P256,      /* ECDSA/ECDH secp256r1 (NIST P-256) */
+    KSM_TYPE_ECC_P384,      /* ECDSA/ECDH secp384r1 (NIST P-384) */
+    KSM_TYPE_ECC_P521,      /* ECDSA/ECDH secp521r1 (NIST P-521) */
+
+    /* ECC Curves (Other) */
+    KSM_TYPE_ECC_SECP256K1, /* ECDSA/ECDH secp256k1 (Bitcoin/Ethereum) */
+
+    /* RSA */
+    KSM_TYPE_RSA_1024,      /* RSA 1024-bit (legacy, not recommended) */
     KSM_TYPE_RSA_2048,      /* RSA 2048-bit */
+    KSM_TYPE_RSA_3072,      /* RSA 3072-bit */
     KSM_TYPE_RSA_4096,      /* RSA 4096-bit */
-    KSM_TYPE_ED25519,       /* EdDSA signing */
-    KSM_TYPE_X25519,        /* X25519 key exchange */
+
+    /* Edwards Curves */
+    KSM_TYPE_ED25519,       /* EdDSA signing (Curve25519) */
+    KSM_TYPE_ED448,         /* EdDSA signing (Curve448) */
+
+    /* Montgomery Curves */
+    KSM_TYPE_X25519,        /* X25519 ECDH (Curve25519) */
+    KSM_TYPE_X448,          /* X448 ECDH (Curve448) */
+
+    /* Symmetric Keys */
     KSM_TYPE_AES_128,       /* AES-128 symmetric (for wrapping) */
     KSM_TYPE_AES_256        /* AES-256 symmetric (for wrapping) */
 } ksm_key_type;

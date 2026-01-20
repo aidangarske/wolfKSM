@@ -12,7 +12,8 @@ EXTRA_DIST = \
     LICENSE \
     .clang-format \
     .clang-tidy \
-    cppcheck-suppressions.txt
+    cppcheck-suppressions.txt \
+    wolfksm.pc.in
 
 # pkg-config file
 pkgconfigdir = $(libdir)/pkgconfig

@@ -14,12 +14,63 @@ What stays inside: private key bytes, crypto operations
 
 ## Quick Start
 
-```bash
-# Build (requires wolfSSL)
-./configure --with-wolfssl=/usr/local
-make && make check
+### Bootstrap Build (First Time Only)
 
-# Use
+Due to circular dependency, build in this order:
+
+**Step 1: Build wolfSSL without --enable-ksm**
+```bash
+cd /path/to/wolfssl
+./autogen.sh  # if from git
+./configure \
+    --enable-keygen \
+    --enable-aesgcm \
+    --enable-hkdf \
+    --enable-curve25519 \
+    --enable-ed25519 \
+    --enable-cryptocb
+make
+sudo make install
+sudo ldconfig
+```
+
+**Step 2: Build and install wolfKSM**
+```bash
+cd /path/to/wolfKSM
+./autogen.sh  # if from git
+./configure
+make
+make check
+sudo make install
+sudo ldconfig
+```
+
+**Step 3: Rebuild wolfSSL with --enable-ksm**
+```bash
+cd /path/to/wolfssl
+make clean
+./configure \
+    --enable-keygen \
+    --enable-aesgcm \
+    --enable-hkdf \
+    --enable-curve25519 \
+    --enable-ed25519 \
+    --enable-cryptocb \
+    --enable-ksm
+make
+sudo make install
+sudo ldconfig
+```
+
+**Step 4: Test**
+```bash
+cd /path/to/wolfssl
+./examples/ksm/ksm_implicit_example
+```
+
+### Usage
+
+```c
 ksm_key_id key;
 ksm_generate(KSM_TYPE_ECC_P256, &key);  // key born inside
 ksm_sign(key, hash, 32, sig, &siglen);  // private key never exposed
@@ -40,13 +91,37 @@ ksm_destroy(key);                        // secure zero
 | `ksm_export_wrapped(id, wrap, buf)` | Encrypted backup |
 | `ksm_import_wrapped(buf, wrap, &id)` | Restore from backup |
 
-## Key Types
+## Supported Algorithms
 
-- `KSM_TYPE_ECC_P256/P384` - ECDSA + ECDH
-- `KSM_TYPE_RSA_2048/4096` - Sign + Decrypt
-- `KSM_TYPE_ED25519` - EdDSA signing
-- `KSM_TYPE_X25519` - Key exchange
-- `KSM_TYPE_AES_128/256` - Wrapping keys
+### Core Library (Full Support)
+All operations available via standalone `libwolfksm`:
+
+| Algorithm | Key Types | Operations | Status |
+|-----------|-----------|------------|--------|
+| **ECC** | P-256, P-384 | ECDSA sign, ECDH | ✅ Full |
+| **RSA** | 2048-bit, 4096-bit | Sign, Decrypt | ✅ Full |
+| **Ed25519** | EdDSA | Sign | ✅ Full |
+| **X25519** | Curve25519 | ECDH | ✅ Full |
+| **AES** | 128-bit, 256-bit | Wrapping | ✅ Full |
+
+### wolfSSL Integration (via Crypto Callback)
+Transparent integration when using `--enable-ksm`:
+
+| Algorithm | Operations | Implicit API | Status |
+|-----------|------------|--------------|--------|
+| **ECC** P-256/P-384 | Sign, ECDH | `wolfKSM_EccSignHash()`, `wolfKSM_EccDhAgree()` | ✅ Available |
+| **RSA** 2048/4096 | Sign, Decrypt | `wolfKSM_RsaSign()`, `wolfKSM_RsaDecrypt()` | ✅ Available |
+| **Ed25519** | Sign | `wolfKSM_Ed25519Sign()` | ✅ Available |
+| **X25519** | ECDH | `wolfKSM_X25519SharedSecret()` | ✅ Available |
+
+### Future Expansion (Planned)
+- Additional ECC curves: P-192, P-224, P-521, secp256k1 (Bitcoin)
+- Additional RSA sizes: 1024, 3072 bits
+- Post-quantum: Falcon, Dilithium, SPHINCS+
+- Classic: DH, DSA
+- Curve448, Ed448
+
+**Design Goal:** Eventually support ALL wolfSSL/wolfCrypt algorithms transparently.
 
 ## Security
 
@@ -70,8 +145,12 @@ ksm_destroy(key);                        // secure zero
 
 ## Dependencies
 
-- wolfSSL with: `--enable-keygen --enable-aesgcm --enable-hkdf`
-- Optional: wolfTPM, wolfHSM
+**Required:**
+- wolfSSL with: `--enable-keygen --enable-aesgcm --enable-hkdf --enable-curve25519 --enable-ed25519 --enable-cryptocb`
+
+**Optional:**
+- wolfTPM (for `--enable-tpm`)
+- wolfHSM (for `--enable-hsm`)
 
 ## License
 
